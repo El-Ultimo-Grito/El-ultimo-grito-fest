@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Encuesta con QR</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--tx:#1d1d1b;--mut:#6b6a66;--ac:#2d5be3;--ok:#1b8a4b;--bad:#c23b2e;--bd:#e2e0da;color-scheme:light}
+@media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#222221;--tx:#f1efe9;--mut:#a09e98;--ac:#6f93ff;--ok:#4cc383;--bad:#ff7b6e;--bd:#3a3936;color-scheme:dark}}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 system-ui,sans-serif;display:flex;justify-content:center;padding:20px 16px}
+main{width:100%;max-width:420px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:16px;padding:22px}
+h1{font-size:1.3rem;margin:0 0 4px}
+p.s{color:var(--mut);margin:0 0 18px;font-size:.92rem}
+label{display:block;font-size:.85rem;color:var(--mut);margin:12px 0 4px}
+input{width:100%;box-sizing:border-box;padding:12px;border:1px solid var(--bd);border-radius:10px;background:var(--bg);color:var(--tx);font-size:1rem}
+button{width:100%;margin-top:18px;padding:13px;border:0;border-radius:10px;background:var(--ac);color:#fff;font-size:1rem;font-weight:600;cursor:pointer}
+button.sec{background:transparent;color:var(--ac);border:1px solid var(--bd);margin-top:10px}
+button:disabled{opacity:.6}
+#qr{display:flex;justify-content:center;margin:18px 0;padding:14px;background:#fff;border-radius:12px}
+.badge{display:inline-block;padding:4px 12px;border-radius:99px;font-weight:600}
+.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.bad{background:color-mix(in srgb,var(--bad) 18%,transparent);color:var(--bad)}
+.err{color:var(--bad);font-size:.88rem;margin-top:10px}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <section id="form" class="card" hidden>
+    <h1>Encuesta</h1>
+    <p class="s">Llena tus datos para recibir tu código QR único.</p>
+    <label for="n">Nombre completo</label>
+    <input id="n" autocomplete="name">
+    <label for="d">Documento de identidad</label>
+    <input id="d" inputmode="numeric" autocomplete="off">
+    <div id="e" class="err" hidden></div>
+    <button id="go">Obtener mi QR</button>
+  </section>
+
+  <section id="done" class="card" hidden>
+    <h1>¡Listo, <span id="dn"></span>!</h1>
+    <p class="s">Este QR es único y personal. Guárdalo y preséntalo cuando te lo pidan.</p>
+    <div id="qr"></div>
+    <button id="dl">Descargar QR</button>
+    <button id="again" class="sec">Registrar a otra persona</button>
+  </section>
+
+  <section id="ver" class="card" hidden>
+    <h1>Verificación</h1>
+    <p class="s" id="vm">Consultando…</p>
+    <div id="vb"></div>
+    <div id="adm" hidden>
+      <label for="k">Clave del personal</label>
+      <input id="k" type="password" autocomplete="off">
+      <button id="use" class="sec">Marcar como usado</button>
+      <div id="ue" class="err" hidden></div>
+    </div>
+  </section>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const m = location.pathname.match(/^\/v\/([a-f0-9]+)$/);
+
+async function api(url, opts){
+  const r = await fetch(url, opts);
+  const j = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, ...j };
+}
+
+async function verificar(id){
+  const r = await api("/api/verificar/" + id);
+  $("vm").textContent = "";
+  if (!r.valido){ $("vb").innerHTML = '<span class="badge bad">QR no válido</span>'; return; }
+  $("vb").innerHTML = '<span class="badge ' + (r.usado ? "bad" : "ok") + '">' + (r.usado ? "Ya utilizado" : "Válido") + '</span><p><strong id="vn"></strong><br><span style="color:var(--mut)">Documento <span id="vd"></span></span></p>';
+  $("vn").textContent = r.nombre; $("vd").textContent = r.documento;
+  $("adm").hidden = r.usado;
+  $("use").onclick = async () => {
+    const x = await api("/api/usar/" + id, { method: "POST", headers: { "x-admin-key": $("k").value } });
+    if (x.ok) return verificar(id);
+    $("ue").textContent = x.error || "No se pudo marcar."; $("ue").hidden = false;
+  };
+}
+
+if (m){ $("ver").hidden = false; verificar(m[1]); } else { $("form").hidden = false; }
+
+$("go").onclick = async () => {
+  const er = $("e"), btn = $("go"); er.hidden = true; btn.disabled = true;
+  const nombre = $("n").value.trim(), documento = $("d").value.trim();
+  const r = await api("/api/registro", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nombre, documento }) });
+  btn.disabled = false;
+  if (!r.ok){ er.textContent = r.error || "No se pudo guardar. Intenta de nuevo."; er.hidden = false; return; }
+  $("dn").textContent = nombre.split(" ")[0];
+  $("qr").innerHTML = "";
+  new QRCode($("qr"), { text: location.origin + "/v/" + r.id, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+  $("form").hidden = true; $("done").hidden = false;
+};
+$("again").onclick = () => { $("n").value = $("d").value = ""; $("done").hidden = true; $("form").hidden = false; };
+$("dl").onclick = () => {
+  const c = $("qr").querySelector("canvas"); if (!c) return;
+  const a = document.createElement("a"); a.href = c.toDataURL("image/png"); a.download = "mi-qr.png"; a.click();
+};
+</script>
+</body>
+</html>
